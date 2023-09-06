@@ -1,0 +1,2 @@
+APScheduler==3.10.4
+rich==13.5.2
