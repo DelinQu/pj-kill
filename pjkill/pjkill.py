@@ -12,6 +12,7 @@ import os
 from logger import get_logger
 from apscheduler.schedulers.blocking import BlockingScheduler
 from datetime import datetime
+from collections import Counter
 
 # * version info
 VERSION = "0.0.1"
@@ -29,19 +30,21 @@ SEQ_CMD = "squeue -p {} | grep {} | grep {}"    # * squeue -p optimal | grep res
 KILL_CMD = "echo {} | sudo -S scancel {}"       # * sudo scancel 123456
 SCT_CMD = "scontrol show job -ddd {}"           # * scontrol show job -ddd 123456
 
-# * targets
-TARGETS = ["jupyter"]
+# * kill rules
+TARGETS = ["jupyter"] # * kill the job if targets in name & runtime > timeout
 
 def init_args() -> Dict:
     """Parse and return the arguments."""
     parser = argparse.ArgumentParser(description="sweep all jobs on a partition and kill the timeout process.")
-    parser.add_argument("--user", default="$", help="the user your want to query")
-    parser.add_argument("--partition", default="optimal", help="your partition")
-    parser.add_argument("--type", default="reserved", help="reserved | spot | all")
-    parser.add_argument("--cycle", default=1, help="pjkill run every cycle time in hour")
-    parser.add_argument("--timeout", default=10, help="timeout in hour")
-    parser.add_argument("--sweep", action="store_true", help="sweep around every cycle.")
-    parser.add_argument("--version", action="store_true", help="display version and exit.")
+    parser.add_argument("--user", default="$", help="the user your want to query, all by default")
+    parser.add_argument("--partition", default="optimal", help="your partition, optimal by default")
+    parser.add_argument("--type", default="reserved", help="reserved | spot, reserved by default")
+    parser.add_argument("--cycle", default=1, help="pjkill run every cycle time in hour, 1 by default")
+    parser.add_argument("--timeout", default=10, help="timeout in hour, 10 by default")
+    parser.add_argument("--ngpu", default=2, help="gpu limit of every job, 2 by default")
+    parser.add_argument("--njob", default=2, help="job number limit of every user, 2 by default")
+    parser.add_argument("--sweep", action="store_true", help="sweep around every cycle, False by default")
+    parser.add_argument("--version", action="store_true", help="display version and exit, False by default")
     args = vars(parser.parse_args())
     return args
 
@@ -81,9 +84,16 @@ def sec_runtime(time_str):
         return "Invalid time format"
 
 
-def kill_jobs(timeout, jobs: Dict, logger=None):
+def kill_jobs(timeout, jobs: Dict, args, logger=None):
     """kill the timeout process"""
+    # * sort all job key:value by time
+    for k, v in jobs.items():
+        jobs[k] = list(v for _, v in sorted(zip(jobs["time"], v), key=lambda x: sec_runtime(x[0]), reverse=True))
+
+    # * count the user number
+    user_num = Counter(jobs["user"])
     jobs["status"] = []
+
     for i, ts in enumerate(jobs["time"]):
         runtime = sec_runtime(ts)
         # * query job target  
@@ -93,18 +103,22 @@ def kill_jobs(timeout, jobs: Dict, logger=None):
         except:
             in_target = False
 
-        # * kill the job if targets in name & runtime > timeout   
-        if in_target and (runtime > timeout * 3600):
+        # * kill the job if (targets in name & runtime > timeout) or gpu > 2   
+        gpus = int(jobs["total_gres"][i].split(":")[-1])
+        if (in_target and runtime > timeout * 3600) or (gpus > args["ngpu"]) or (user_num[jobs["user"][i]] > args["njob"]):
             try:
-                subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True)
+                # subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True)
                 jobs["status"].append(STATES[1])
                 logger.info("== kill job {} ==".format(jobs["jobid"][i]))
+                if user_num[jobs["user"][i]] > args["njob"]:
+                    user_num[jobs["user"][i]] -= 1
             except:
                 jobs["status"].append(STATES[0])
                 logger.info("== kill job {} failed ==".format(jobs["jobid"][i]))
+            
         else:
             jobs["status"].append(STATES[0])
-
+        
         # * add ratio
         jobs["time"][i] += " / {}".format("{:d}-{:02d}:{:02d}:{:02d}".format(timeout // 24, timeout % 24, 0, 0))
     return jobs
@@ -124,7 +138,7 @@ def viz_jobs(jobs: Dict):
 
 def threads_job(args, logger):
     jobs = get_jobs(args["user"], args["partition"], args["type"], logger)
-    njobs = kill_jobs(args["timeout"], jobs, logger)
+    njobs = kill_jobs(args["timeout"], jobs, args, logger)
     viz_jobs(njobs)
 
 
@@ -135,8 +149,7 @@ def main():
         sys.exit()
 
     # * log, name with PJKILLER + date
-    log_name = "PJKILLER"
-    logger = get_logger(log_name, f'{os.environ["HOME"]}/.pjkill')
+    logger = get_logger("PJKILLER", f'{os.environ["HOME"]}/.pjkill')
 
     if args["sweep"]:
         # * sweep
