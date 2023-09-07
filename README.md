@@ -69,11 +69,11 @@ optional arguments:
 
 Jobs will be killed if:
 
-[x] Jobs exceed the timeout limitation
+- [x] Jobs exceed the timeout limitation
 
-[x] Jobs exceed the gpu number limitation
+- [x] Jobs exceed the gpu number limitation
 
-[x] user exceed the job number limitation
+- [x] user exceed the job number limitation
 
 ### License
 
