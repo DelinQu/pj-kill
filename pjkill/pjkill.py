@@ -109,6 +109,7 @@ def kill_jobs(timeout, jobs: Dict, args, logger=None):
 
             # * if use a command
             if "/mnt/" in cmd:
+                print(f"++ {cmd}")
                 ret = subprocess.check_output(BST_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True).decode("ascii")
                 print(f"** {ret}")
                 ret = subprocess.check_output("cat {}".format(ret.split(" ")[-1].split("\n")[0]), shell=True).decode("ascii")
