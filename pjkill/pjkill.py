@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 import sys
 import os
-from logger import get_logger
+from .logger import get_logger
 from apscheduler.schedulers.blocking import BlockingScheduler
 from datetime import datetime
 from collections import Counter
