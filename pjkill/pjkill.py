@@ -110,11 +110,13 @@ def kill_jobs(timeout, jobs: Dict, args, logger=None):
             # * if use a command
             if "/mnt/" in cmd:
                 ret = subprocess.check_output(BST_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True).decode("ascii")
-                ret = subprocess.check_output("cat {}".format(ret.split(" ")[-1].split("\n")[0]), shell=True).decode("ascii")
+                script = ret.split(" ")[-1].split("\n")[0]
+
+                ret = subprocess.check_output("cat {}".format(script), shell=True).decode("ascii")
                 in_target = in_target or any([(t in ret) for t in TARGETS])
 
                 # * remove the batch script
-                os.remove(ret.split(" ")[-1].split("\n")[0])
+                os.remove(script)
         except:
             in_target = False
 
