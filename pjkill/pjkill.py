@@ -26,12 +26,14 @@ HEADER = ["jobid", "partition", "name", "quota_type", "user", "priority", "time"
 valids = [0, 1, 2, 3, 4, 5, 7, 9, 10]
 
 # * commands
-SEQ_CMD = "squeue -p {} | grep {} | grep {}"    # * squeue -p optimal | grep reserved | grep $USER
-KILL_CMD = "echo {} | sudo -S scancel {}"       # * sudo scancel 123456
-SCT_CMD = "scontrol show job -ddd {}"           # * scontrol show job -ddd 123456
+SEQ_CMD = "squeue -p {} | grep {} | grep {}"  # * squeue -p optimal | grep reserved | grep $USER
+KILL_CMD = "echo {} | sudo -S scancel {}"  # * sudo scancel 123456
+SCT_CMD = "scontrol show job -ddd {}"  # * scontrol show job -ddd 123456
+BST_CMD = "echo {} | sudo -S scontrol write batchscript {}"  # * scontrol write batchscript
 
 # * kill rules
-TARGETS = ["jupyter"] # * kill the job if targets in name & runtime > timeout
+TARGETS = ["jupyter"]  # * kill the job if targets in name & runtime > timeout
+
 
 def init_args() -> Dict:
     """Parse and return the arguments."""
@@ -96,18 +98,30 @@ def kill_jobs(timeout, jobs: Dict, args, logger=None):
 
     for i, ts in enumerate(jobs["time"]):
         runtime = sec_runtime(ts)
-        # * query job target  
+        # * query job target
         try:
             ret = subprocess.check_output(SCT_CMD.format(jobs["jobid"][i]), shell=True).decode("ascii")
-            in_target = any([(t in ret) for t in TARGETS])
+            cmd = ret.split("Command=")[1].split("\n")[0]
+            in_target = any([(t in cmd) for t in TARGETS])
+            logger.info(f"{jobs['jobid'][i]}: {cmd}")
+
+            # * if use a command
+            if "/mnt/" in cmd:
+                ret = subprocess.check_output(BST_CMD.format(jobs["jobid"][i]), shell=True).decode("ascii")
+                ret = subprocess.check_output("cat {}".format(ret.split(" ")[-1].split("\n")[0]), shell=True).decode("ascii")
+                in_target = any([(t in ret) for t in TARGETS])
         except:
             in_target = False
 
-        # * kill the job if (targets in name & runtime > timeout) or gpu > 2   
+        """ * kill the job if:
+        1. (targets in name & runtime > timeout) 
+        2. or gpu > 2
+        3. or user_num > 2
+        """
         gpus = int(jobs["total_gres"][i].split(":")[-1])
         if (in_target and runtime > timeout * 3600) or (gpus > args["ngpu"]) or (user_num[jobs["user"][i]] > args["njob"]):
             try:
-                # subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True)
+                subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True)
                 jobs["status"].append(STATES[1])
                 logger.info("== kill job {} ==".format(jobs["jobid"][i]))
                 if user_num[jobs["user"][i]] > args["njob"]:
@@ -115,10 +129,10 @@ def kill_jobs(timeout, jobs: Dict, args, logger=None):
             except:
                 jobs["status"].append(STATES[0])
                 logger.info("== kill job {} failed ==".format(jobs["jobid"][i]))
-            
+
         else:
             jobs["status"].append(STATES[0])
-        
+
         # * add ratio
         jobs["time"][i] += " / {}".format("{:d}-{:02d}:{:02d}:{:02d}".format(timeout // 24, timeout % 24, 0, 0))
     return jobs
@@ -154,11 +168,12 @@ def main():
     if args["sweep"]:
         # * sweep
         schedule = BlockingScheduler()
-        schedule.add_job(threads_job, 'interval', seconds=args["cycle"] * 60 * 60, id='PJ_KILLER', args=[args, logger], next_run_time=datetime.now())
+        schedule.add_job(threads_job, "interval", seconds=args["cycle"] * 60 * 60, id="PJ_KILLER", args=[args, logger], next_run_time=datetime.now())
         schedule.start()
     else:
         # * single
         threads_job(args, logger)
+
 
 if __name__ == "__main__":
     main()
