@@ -1,9 +1,9 @@
 # Pj-Kill
-A lightweight Tool for S-Cluster to clean timeout jupyter jobs, which supports scheduler sweep, logging and rich CLI.
+A lightweight Tool for S-cluster to clean timeout jupyter jobs, which supports scheduler sweep, logging and rich CLI.
 
 ### Examples
 
-- A Single RUN
+- A single RUN
 ```zsh
 export SUDO_PASSWD=12345 # set sudo password in env
 pjkill 
@@ -16,7 +16,7 @@ export SUDO_PASSWD=12345 # set sudo password in env
 pjkill --sweep --cycle 2 # sweep every 2 hour (1 by default)
 ``` 
 
-- all the logs are stored in `~/.pjkill.log` by default
+- All the logs are stored in `~/.pjkill.log` by default
 ```zsh
 (base) tree ~/.pjkill -L 1
 /mnt/petrelfs/qudelin/.pjkill
@@ -34,7 +34,7 @@ pjkill --sweep --cycle 2 # sweep every 2 hour (1 by default)
 
 ### Install
 
-Requires Python 3.6+, install the dependencies before lunching the tool.
+Requires python 3.6+, install the dependencies before lunching the tool.
 
 ```zsh
 pip install -r requirements.txt

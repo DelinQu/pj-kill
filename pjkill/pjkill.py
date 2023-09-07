@@ -11,6 +11,7 @@ import sys
 import os
 from logger import get_logger
 from apscheduler.schedulers.blocking import BlockingScheduler
+from datetime import datetime
 
 # * version info
 VERSION = "0.0.1"
@@ -28,16 +29,19 @@ SEQ_CMD = "squeue -p {} | grep {} | grep {}"    # * squeue -p optimal | grep res
 KILL_CMD = "echo {} | sudo -S scancel {}"       # * sudo scancel 123456
 SCT_CMD = "scontrol show job -ddd {}"           # * scontrol show job -ddd 123456
 
+# * targets
+TARGETS = ["jupyter"]
+
 def init_args() -> Dict:
     """Parse and return the arguments."""
-    parser = argparse.ArgumentParser(description="Sweep all jobs on a partition and kill the timeout process.")
+    parser = argparse.ArgumentParser(description="sweep all jobs on a partition and kill the timeout process.")
     parser.add_argument("--user", default="$", help="the user your want to query")
     parser.add_argument("--partition", default="optimal", help="your partition")
     parser.add_argument("--type", default="reserved", help="reserved | spot | all")
     parser.add_argument("--cycle", default=1, help="pjkill run every cycle time in hour")
     parser.add_argument("--timeout", default=10, help="timeout in hour")
     parser.add_argument("--sweep", action="store_true", help="sweep around every cycle.")
-    parser.add_argument("--version", action="store_true", help="Display version and exit.")
+    parser.add_argument("--version", action="store_true", help="display version and exit.")
     args = vars(parser.parse_args())
     return args
 
@@ -82,16 +86,22 @@ def kill_jobs(timeout, jobs: Dict, logger=None):
     jobs["status"] = []
     for i, ts in enumerate(jobs["time"]):
         runtime = sec_runtime(ts)
+        # * query job target  
+        try:
+            ret = subprocess.check_output(SCT_CMD.format(jobs["jobid"][i]), shell=True).decode("ascii")
+            in_target = any([(t in ret) for t in TARGETS])
+        except:
+            in_target = False
 
-        # * kill the job if runtime > timeout
-        if runtime > timeout * 3600:
-            logger.info("== kill job {} ==".format(jobs["jobid"][i]))
+        # * kill the job if targets in name & runtime > timeout   
+        if in_target and (runtime > timeout * 3600):
             try:
-                # subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True)
+                subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True)
                 jobs["status"].append(STATES[1])
+                logger.info("== kill job {} ==".format(jobs["jobid"][i]))
             except:
-                print("== kill job {} failed ==".format(jobs["jobid"][i]))
                 jobs["status"].append(STATES[0])
+                logger.info("== kill job {} failed ==".format(jobs["jobid"][i]))
         else:
             jobs["status"].append(STATES[0])
 
@@ -131,7 +141,7 @@ def main():
     if args["sweep"]:
         # * sweep
         schedule = BlockingScheduler()
-        schedule.add_job(threads_job, 'interval', seconds=args["cycle"] * 60 * 60, id='PJ_KILLER', args=[args, logger])
+        schedule.add_job(threads_job, 'interval', seconds=args["cycle"] * 60 * 60, id='PJ_KILLER', args=[args, logger], next_run_time=datetime.now())
         schedule.start()
     else:
         # * single
