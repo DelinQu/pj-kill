@@ -29,7 +29,7 @@ valids = [0, 1, 2, 3, 4, 5, 7, 9, 10]
 SEQ_CMD = "squeue -p {} | grep {} | grep {}"  # * squeue -p optimal | grep reserved | grep $USER
 KILL_CMD = "echo {} | sudo -S scancel {}"  # * sudo scancel 123456
 SCT_CMD = "scontrol show job -ddd {}"  # * scontrol show job -ddd 123456
-BST_CMD = "echo {} | sudo -S scontrol write batchscript {}"  # * scontrol write batchscript
+BST_CMD = "echo {} | sudo -S scontrol write batch_script {}"  # * scontrol write batchscript
 
 # * kill rules
 TARGETS = ["jupyter"]  # * kill the job if targets in name & runtime > timeout
