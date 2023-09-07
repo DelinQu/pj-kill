@@ -45,11 +45,11 @@ pip install git+https://github.com/DelinQu/pj-kill # install from remote repo
 ### Usage
 
 ```bash
-python pjkill.py --help                                                                                                                                         
+pjkill --help                                                                                                                                         
 
 usage: pjkill.py [-h] [--user USER] [--partition PARTITION] [--type TYPE] [--cycle CYCLE] [--timeout TIMEOUT] [--sweep] [--version]
 
-Sweep all jobs on a partition and kill the timeout process.
+sweep all jobs on a partition and kill the timeout process.
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -60,7 +60,7 @@ optional arguments:
   --cycle CYCLE         pjkill run every cycle time in hour
   --timeout TIMEOUT     timeout in hour
   --sweep               sweep around every cycle.
-  --version             Display version and exit.
+  --version             display version and exit.
 ```
 
 ### License
