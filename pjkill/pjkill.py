@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 import sys
 import os
-from .logger import get_logger
+from pjkill.logger import get_logger
 from apscheduler.schedulers.blocking import BlockingScheduler
 from datetime import datetime
 from collections import Counter
@@ -46,6 +46,7 @@ def init_args() -> Dict:
     parser.add_argument("--ngpu", default=2, help="gpu limit of every job, 2 by default")
     parser.add_argument("--njob", default=2, help="job number limit of every user, 2 by default")
     parser.add_argument("--sweep", action="store_true", help="sweep around every cycle, False by default")
+    parser.add_argument("--unkill", action="store_true", help="unkill the job to stay safe False by default")
     parser.add_argument("--version", action="store_true", help="display version and exit, False by default")
     args = vars(parser.parse_args())
     return args
@@ -65,7 +66,6 @@ def get_jobs(user="$", partition="optimal", type="reserved", logger=None) -> dic
         # * filter out the space and empty string
         values = list(filter(lambda x: x != "", line.split(" ")))
         values = [values[i] for i in valids]
-
         for k, v in zip(HEADER, values):
             jobs[k].append(v)
     return jobs
@@ -89,8 +89,10 @@ def sec_runtime(time_str):
 def kill_jobs(timeout, jobs: Dict, args, logger=None):
     """kill the timeout process"""
     # * sort all job key:value by time
+    times = list(map(sec_runtime, jobs["time"]))
+
     for k, v in jobs.items():
-        jobs[k] = list(v for _, v in sorted(zip(jobs["time"], v), key=lambda x: sec_runtime(x[0]), reverse=True))
+        jobs[k] = list(v for _, v in sorted(zip(times, v), key=lambda x: x[0], reverse=True))
 
     # * count the user number
     user_num = Counter(jobs["user"])
@@ -109,7 +111,7 @@ def kill_jobs(timeout, jobs: Dict, args, logger=None):
             if "/mnt/" in cmd:
                 ret = subprocess.check_output(BST_CMD.format(jobs["jobid"][i]), shell=True).decode("ascii")
                 ret = subprocess.check_output("cat {}".format(ret.split(" ")[-1].split("\n")[0]), shell=True).decode("ascii")
-                in_target = any([(t in ret) for t in TARGETS])
+                in_target = in_target or any([(t in ret) for t in TARGETS])
         except:
             in_target = False
 
@@ -121,7 +123,8 @@ def kill_jobs(timeout, jobs: Dict, args, logger=None):
         gpus = int(jobs["total_gres"][i].split(":")[-1])
         if (in_target and runtime > timeout * 3600) or (gpus > args["ngpu"]) or (user_num[jobs["user"][i]] > args["njob"]):
             try:
-                subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True)
+                if not args["unkill"]:
+                    subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True)
                 jobs["status"].append(STATES[1])
                 logger.info("== kill job {} ==".format(jobs["jobid"][i]))
                 if user_num[jobs["user"][i]] > args["njob"]:
