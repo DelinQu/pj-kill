@@ -149,7 +149,7 @@ def viz_jobs(jobs: Dict):
         table.add_column(k, style=STYLES[i])
 
     for i in range(len(jobs["jobid"])):
-        table.add_row(*[jobs[k][i] for k in jobs.keys()])ssh ju
+        table.add_row(*[jobs[k][i] for k in jobs.keys()])
     console.print(table)
 
 
