@@ -128,8 +128,8 @@ def kill_jobs(timeout, jobs: Dict, args, logger=None):
         runtime = sec_runtime(ts)
         user, in_target, cmd, jobid = jobs["user"][i], job_valids[i], cmds[i], jobs["jobid"][i]
 
-        """ * kill the job if:
-        1. (targets in name & runtime > timeout) 
+        """ * kill the job if in target and:
+        1. runtime > timeout 
         2. or gpu > 2
         3. or user_num > 2
         """
