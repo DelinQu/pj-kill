@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 # coding=utf-8
 from __future__ import print_function, annotations
-import re
-import subprocess
-from typing import Dict
-import argparse
+from apscheduler.schedulers.blocking import BlockingScheduler
 from rich.console import Console
+from collections import Counter
+from datetime import datetime
 from rich.table import Table
+from typing import Dict
+import subprocess
+import argparse
 import sys
+import re
 import os
-from pjkill.logger import get_logger
 
 # from logger import get_logger
-from apscheduler.schedulers.blocking import BlockingScheduler
-from datetime import datetime
-from collections import Counter
+from pjkill.logger import get_logger
 
 # * version info
 VERSION = "0.0.1"
@@ -88,6 +88,29 @@ def sec_runtime(time_str):
         return "Invalid time format"
 
 
+def is_target_job(jobid):
+    """is the job jupyter"""
+    try:
+        ret = subprocess.check_output(SCT_CMD.format(jobid), shell=True).decode("ascii")
+        cmd = ret.split("Command=")[1].split("\n")[0]
+        in_target = any([(t in cmd) for t in TARGETS])
+
+        # * if use a command
+        if "/mnt/" in cmd:
+            ret = subprocess.check_output(BST_CMD.format(os.environ["SUDO_PASSWD"], jobid), shell=True).decode("ascii")
+            script = ret.split(" ")[-1].split("\n")[0]
+
+            ret = subprocess.check_output("cat {}".format(script), shell=True).decode("ascii")
+            in_target = in_target or any([(t in ret) for t in TARGETS])
+
+            # * remove the batch script
+            os.remove(script)
+    except:
+        in_target = False
+
+    return in_target, cmd
+
+
 def kill_jobs(timeout, jobs: Dict, args, logger=None):
     """kill the timeout process"""
     # * sort all job key:value by time
@@ -96,31 +119,14 @@ def kill_jobs(timeout, jobs: Dict, args, logger=None):
     for k, v in jobs.items():
         jobs[k] = list(v for _, v in sorted(zip(times, v), key=lambda x: x[0], reverse=True))
 
-    # * count the user number
-    user_num = Counter(jobs["user"])
-    jobs["status"] = []
+    # * query job target and count user number in target
+    job_valids, cmds = zip(*map(is_target_job, jobs["jobid"]))
+    user_num = Counter([user for user, valid in zip(jobs["user"], job_valids) if valid])
 
+    jobs["status"] = []
     for i, ts in enumerate(jobs["time"]):
         runtime = sec_runtime(ts)
-        # * query job target
-        try:
-            ret = subprocess.check_output(SCT_CMD.format(jobs["jobid"][i]), shell=True).decode("ascii")
-            cmd = ret.split("Command=")[1].split("\n")[0]
-            in_target = any([(t in cmd) for t in TARGETS])
-            logger.info(f"{jobs['jobid'][i]}: {cmd}")
-
-            # * if use a command
-            if "/mnt/" in cmd:
-                ret = subprocess.check_output(BST_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True).decode("ascii")
-                script = ret.split(" ")[-1].split("\n")[0]
-
-                ret = subprocess.check_output("cat {}".format(script), shell=True).decode("ascii")
-                in_target = in_target or any([(t in ret) for t in TARGETS])
-
-                # * remove the batch script
-                os.remove(script)
-        except:
-            in_target = False
+        user, in_target, cmd, jobid = jobs["user"][i], job_valids[i], cmds[i], jobs["jobid"][i]
 
         """ * kill the job if:
         1. (targets in name & runtime > timeout) 
@@ -128,20 +134,21 @@ def kill_jobs(timeout, jobs: Dict, args, logger=None):
         3. or user_num > 2
         """
         gpus = int(jobs["total_gres"][i].split(":")[-1])
-        if (in_target and runtime > timeout * 3600) or (gpus > args["ngpu"]) or (user_num[jobs["user"][i]] > args["njob"]):
+        if in_target and (runtime > timeout * 3600 or gpus > args["ngpu"] or user_num[user] > args["njob"]):
             try:
                 if not args["unkill"]:
-                    subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobs["jobid"][i]), shell=True)
+                    subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobid), shell=True)
                 jobs["status"].append(STATES[1])
-                logger.info("== kill job {} ==".format(jobs["jobid"][i]))
+                logger.info(f"== jobid: [{jobid}], cmd: [{cmd}], was killed")
+
                 if user_num[jobs["user"][i]] > args["njob"]:
                     user_num[jobs["user"][i]] -= 1
             except:
                 jobs["status"].append(STATES[0])
-                logger.info("== kill job {} failed ==".format(jobs["jobid"][i]))
-
+                logger.info(f"== jobid: {jobid}, cmd: {cmd}, killing failed!")
         else:
             jobs["status"].append(STATES[0])
+            logger.info(f"== jobid: [{jobid}], cmd: [{cmd}], stays safe")
 
         # * add ratio
         jobs["time"][i] += " / {}".format("{:d}-{:02d}:{:02d}:{:02d}".format(timeout // 24, timeout % 24, 0, 0))
@@ -163,6 +170,7 @@ def viz_jobs(jobs: Dict):
 def threads_job(args, logger):
     jobs = get_jobs(args["user"], args["partition"], args["type"], logger)
     njobs = kill_jobs(args["timeout"], jobs, args, logger)
+    logger.info("\n")
     viz_jobs(njobs)
 
 
