@@ -10,6 +10,8 @@ from rich.table import Table
 import sys
 import os
 from pjkill.logger import get_logger
+
+# from logger import get_logger
 from apscheduler.schedulers.blocking import BlockingScheduler
 from datetime import datetime
 from collections import Counter
@@ -38,13 +40,13 @@ TARGETS = ["jupyter"]  # * kill the job if targets in name & runtime > timeout
 def init_args() -> Dict:
     """Parse and return the arguments."""
     parser = argparse.ArgumentParser(description="sweep all jobs on a partition and kill the timeout process.")
-    parser.add_argument("--user", default="$", help="the user your want to query, all by default")
-    parser.add_argument("--partition", default="optimal", help="your partition, optimal by default")
-    parser.add_argument("--type", default="reserved", help="reserved | spot, reserved by default")
-    parser.add_argument("--cycle", default=1, help="pjkill run every cycle time in hour, 1 by default")
-    parser.add_argument("--timeout", default=10, help="timeout in hour, 10 by default")
-    parser.add_argument("--ngpu", default=2, help="gpu limit of every job, 2 by default")
-    parser.add_argument("--njob", default=2, help="job number limit of every user, 2 by default")
+    parser.add_argument("--user", type=str, default="$", help="the user your want to query, all by default")
+    parser.add_argument("--partition", type=str, default="optimal", help="your partition, optimal by default")
+    parser.add_argument("--type", type=str, default="reserved", help="reserved | spot, reserved by default")
+    parser.add_argument("--cycle", type=int, default=60, help="pjkill run every cycle time in minute, 60 by default")
+    parser.add_argument("--timeout", type=int, default=10, help="timeout in hour, 10 by default")
+    parser.add_argument("--ngpu", type=int, default=2, help="gpu limit of every job, 2 by default")
+    parser.add_argument("--njob", type=int, default=2, help="job number limit of every user, 2 by default")
     parser.add_argument("--sweep", action="store_true", help="sweep around every cycle, False by default")
     parser.add_argument("--unkill", action="store_true", help="unkill the job to stay safe False by default")
     parser.add_argument("--version", action="store_true", help="display version and exit, False by default")
@@ -176,7 +178,7 @@ def main():
     if args["sweep"]:
         # * sweep
         schedule = BlockingScheduler()
-        schedule.add_job(threads_job, "interval", seconds=args["cycle"] * 60 * 60, id="PJ_KILLER", args=[args, logger], next_run_time=datetime.now())
+        schedule.add_job(threads_job, "interval", seconds=args["cycle"] * 60, id="PJ_KILLER", args=[args, logger], next_run_time=datetime.now())
         schedule.start()
     else:
         # * single

@@ -47,19 +47,16 @@ pip install git+https://github.com/DelinQu/pj-kill # install from remote repo
 ```bash
 pjkill --help                                                                                                                                         
 
-usage: pjkill [-h] [--user USER] [--partition PARTITION] [--type TYPE]       
-              [--cycle CYCLE] [--timeout TIMEOUT] [--ngpu NGPU] [--njob NJOB]
-              [--sweep] [--unkill] [--version]
+usage: pjkill [-h] [--user USER] [--partition PARTITION] [--type TYPE] [--cycle CYCLE] [--timeout TIMEOUT] [--ngpu NGPU] [--njob NJOB] [--sweep] [--unkill] [--version]
 
 sweep all jobs on a partition and kill the timeout process.
 
 optional arguments:
   -h, --help            show this help message and exit
   --user USER           the user your want to query, all by default
-  --partition PARTITION
-                        your partition, optimal by default
+  --partition PARTITION your partition, optimal by default
   --type TYPE           reserved | spot, reserved by default
-  --cycle CYCLE         pjkill run every cycle time in hour, 1 by default    
+  --cycle CYCLE         pjkill run every cycle time in minute, 60 by default
   --timeout TIMEOUT     timeout in hour, 10 by default
   --ngpu NGPU           gpu limit of every job, 2 by default
   --njob NJOB           job number limit of every user, 2 by default
