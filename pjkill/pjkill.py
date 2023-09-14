@@ -107,6 +107,7 @@ def is_target_job(jobid):
             os.remove(script)
     except:
         in_target = False
+        cmd = "Warning: An error was detected in this job."
 
     return in_target, cmd
 
