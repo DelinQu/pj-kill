@@ -91,7 +91,7 @@ def sec_runtime(time_str):
 def is_target_job(jobid):
     """is the job jupyter"""
     try:
-        ret = subprocess.check_output(SCT_CMD.format(jobid), shell=True).decode("ascii")
+        ret = subprocess.check_output(SCT_CMD.format(jobid), shell=True).decode("utf-8")
         cmd = ret.split("Command=")[1].split("\n")[0]
         in_target = any([(t in cmd) for t in TARGETS])
 
