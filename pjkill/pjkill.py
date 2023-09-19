@@ -100,7 +100,7 @@ def is_target_job(jobid):
             ret = subprocess.check_output(BST_CMD.format(os.environ["SUDO_PASSWD"], jobid), shell=True).decode("ascii")
             script = ret.split(" ")[-1].split("\n")[0]
 
-            ret = subprocess.check_output("cat {}".format(script), shell=True).decode("ascii")
+            ret = subprocess.check_output("cat {}".format(script), shell=True).decode("utf-8")
             in_target = in_target or any([(t in ret) for t in TARGETS])
 
             # * remove the batch script
