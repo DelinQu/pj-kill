@@ -88,6 +88,10 @@ def sec_runtime(time_str):
         return "Invalid time format"
 
 
+def is_sbatch(cmd):
+    return "/mnt/" in cmd and (" " not in cmd)
+
+
 def is_target_job(jobid):
     """is the job jupyter"""
     try:
@@ -96,7 +100,7 @@ def is_target_job(jobid):
         in_target = any([(t in cmd) for t in TARGETS])
 
         # * if use a command
-        if "/mnt/" in cmd:
+        if is_sbatch(cmd):
             ret = subprocess.check_output(BST_CMD.format(os.environ["SUDO_PASSWD"], jobid), shell=True).decode("ascii")
             script = ret.split(" ")[-1].split("\n")[0]
 
