@@ -136,7 +136,7 @@ def kill_jp_jobs(timeout, jobs: pd.DataFrame, args, logger=None):
         3. or user_num > 2
         """
         gpus = int(jobs["total_gres"][i].split(":")[-1])
-        if in_target and (runtime > timeout * 3600 or gpus > args["ngpu"] or user_num[user] > args["njob"]):
+        if in_target and (runtime > timeout * 3600 or gpus > args["jp_ngpu"] or user_num[user] > args["njob"]):
             try:
                 if not args["unkill"]:
                     subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobid), shell=True)
