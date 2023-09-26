@@ -14,8 +14,8 @@ import sys
 import re
 import os
 
-# from logger import get_logger
-from pjkill.logger import get_logger
+from logger import get_logger
+# from pjkill.logger import get_logger
 
 # * version info
 VERSION = "0.0.1"
@@ -88,6 +88,22 @@ def get_jobs(user="$", partition="optimal", type="reserved", logger=None) -> dic
     jobs = pd.DataFrame(jobs)
     return jobs
 
+def get_user_gpu(jobs: pd.DataFrame):
+    types = ["reserved", "spot"]
+    users = jobs['user'].unique().tolist()
+    user_ngpu = {
+        'user': users,
+        'reserved': [0] * len(users),
+        'spot': [0] * len(users)
+    }
+
+    for i, user in enumerate(jobs['user']):
+        if jobs["quota_type"][i] in types:
+            idx = user_ngpu['user'].index(user)
+            user_ngpu[jobs["quota_type"][i]][idx] += int(jobs["total_gres"][i].split(":")[-1])
+    df = pd.DataFrame(user_ngpu)
+    return df.sort_values(by="reserved", ascending=False, ignore_index=True)
+
 def is_sbatch(cmd):
     return "/mnt/" in cmd and (" " not in cmd)
 
@@ -119,7 +135,7 @@ def is_target_job(jobid):
 def kill_jp_jobs(timeout, jobs: pd.DataFrame, args, logger=None):
     """kill the timeout process"""
     # * sort all job key:value by time
-    jobs = jobs.sort_values(by="stime", ascending=False)
+    jobs = jobs.sort_values(by="stime", ascending=False, ignore_index=True)
 
     # * query job target and count user number in target
     job_valids, cmds = zip(*map(is_target_job, jobs["jobid"]))
@@ -157,7 +173,7 @@ def kill_jp_jobs(timeout, jobs: pd.DataFrame, args, logger=None):
 def kill_reserved_jobs(jobs: pd.DataFrame, args, logger=None):
     """kill the num exceed jobs"""
     # * sort all job key:value by time
-    jobs = jobs.sort_values(by="stime", ascending=True)
+    jobs = jobs.sort_values(by="stime", ascending=True, ignore_index=True)
 
     # * query job target and count user number in target
     user_ngpu = {k: 0 for k in jobs['user'].unique().tolist()}
@@ -186,6 +202,7 @@ def kill_reserved_jobs(jobs: pd.DataFrame, args, logger=None):
                 logger.info(f"== jobid: {jobid}, exceeded maxgpu number, killing failed!")
         else:
             logger.info(f"== jobid: [{jobid}], under maxgpu number, stays safe")
+
     return jobs
 
 def viz_jobs(jobs):
@@ -196,12 +213,25 @@ def viz_jobs(jobs):
         table.add_column(k, style=STYLES[i])
 
     for i in range(len(jobs["jobid"])):
-        table.add_row(*[jobs[k][i] for k in jobs.keys()])
+        table.add_row(*[str(jobs[k][i]) for k in jobs.keys()])
+    console.print(table)
+
+
+def viz_user_ngpu(user_ngpu):
+    """visualize the user gpu"""
+    console = Console()
+    table = Table(title="User-GPU Occupation", show_header=True, header_style="bold magenta")
+    for i, k in enumerate(user_ngpu.keys()):
+        table.add_column(k, style=STYLES[i])
+
+    for i in range(len(user_ngpu["user"])):
+        table.add_row(*[str(user_ngpu[k][i]) for k in user_ngpu.keys()])
     console.print(table)
 
 
 def threads_job(args, logger):
     jobs = get_jobs(args["user"], args["partition"], args["type"], logger)
+    info_user_ngpu = get_user_gpu(jobs)
 
     # * kill jupyter jobs
     njobs = kill_jp_jobs(args["timeout"], jobs, args, logger)
@@ -210,6 +240,7 @@ def threads_job(args, logger):
     njobs = kill_reserved_jobs(njobs, args, logger)
 
     logger.info("\n")
+    viz_user_ngpu(info_user_ngpu)
     viz_jobs(njobs.drop('stime', axis=1))
 
 
