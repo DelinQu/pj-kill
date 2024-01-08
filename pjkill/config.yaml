@@ -1,0 +1,14 @@
+user: "$" # the user to query, all by default
+partition: optimal # the partition to query, optimal by default
+type: reserved # source type, [reserved, spot], reserved by default
+cycle: 60 # pjkill run every cycle time in minute, 60 by default
+timeout: 10 # timeout in hour, 10 by default
+jp_ngpu: 2 # gpu limit of every job, 2 by default
+total_ngpu: 12 # gpu limit of every user, 12 by default
+njob: 2 # jupyter job number limit of every user, 2 by default
+SUDO_PASSWD: 123456 # the passwd for sudo authorization
+
+# capture by CMD
+sweep: False # sweep around every cycle, False by default
+unkill: False # unkill the job to stay safe False by default
+version: False # display version and exit, False by default

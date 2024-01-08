@@ -4,18 +4,20 @@ from __future__ import print_function, annotations
 from apscheduler.schedulers.blocking import BlockingScheduler
 from rich.console import Console
 from collections import Counter
+from omegaconf import OmegaConf
 from datetime import datetime
 from rich.table import Table
 from typing import Dict
 import pandas as pd
 import subprocess
+from pathlib import Path
 import argparse
 import sys
 import re
 import os
 
-from logger import get_logger
-# from pjkill.logger import get_logger
+# from logger import get_logger
+from pjkill.logger import get_logger
 
 # * version info
 VERSION = "0.0.1"
@@ -33,6 +35,7 @@ SEQ_CMD = "squeue -p {} | grep {} | grep {}"  # * squeue -p optimal | grep reser
 KILL_CMD = "echo {} | sudo -S scancel {}"  # * sudo scancel 123456
 SCT_CMD = "scontrol show job -ddd {}"  # * scontrol show job -ddd 123456
 BST_CMD = "echo {} | sudo -S scontrol write batch_script {}"  # * scontrol write batchscript
+CINFO_CMD = "cinfo -p {} occupy-reserved" # * show nodes of a specific partition
 
 # * kill rules
 TARGETS = ["jupyter"]  # * kill the job if targets in name & runtime > timeout
@@ -40,14 +43,7 @@ TARGETS = ["jupyter"]  # * kill the job if targets in name & runtime > timeout
 def init_args() -> Dict:
     """Parse and return the arguments."""
     parser = argparse.ArgumentParser(description="sweep all jobs on a partition and kill the timeout process.")
-    parser.add_argument("--user", type=str, default="$", help="the user your want to query, all by default")
-    parser.add_argument("--partition", type=str, default="optimal", help="your partition, optimal by default")
-    parser.add_argument("--type", type=str, default="reserved", help="reserved | spot, reserved by default")
-    parser.add_argument("--cycle", type=int, default=60, help="pjkill run every cycle time in minute, 60 by default")
-    parser.add_argument("--timeout", type=int, default=10, help="timeout in hour, 10 by default")
-    parser.add_argument("--jp_ngpu", type=int, default=2, help="gpu limit of every job, 2 by default")
-    parser.add_argument("--total_ngpu", type=int, default=8, help="gpu limit of every user, 8 by default")
-    parser.add_argument("--njob", type=int, default=2, help="job number limit of every user, 2 by default")
+    parser.add_argument("--cfg", type=str, default=f"{os.environ['HOME']}/.pjkill/config.yaml", help=f"pjkill config file, {os.environ['HOME']}/.pjkill/config.yaml by default")
     parser.add_argument("--sweep", action="store_true", help="sweep around every cycle, False by default")
     parser.add_argument("--unkill", action="store_true", help="unkill the job to stay safe False by default")
     parser.add_argument("--version", action="store_true", help="display version and exit, False by default")
@@ -67,7 +63,21 @@ def sec_runtime(time_str):
     else:
         return "Invalid time format"
 
-def get_jobs(user="$", partition="optimal", type="reserved", logger=None) -> dict:
+def get_nodes(partition):
+    NODE_LIST = []
+    try:
+        lines = subprocess.check_output(CINFO_CMD.format(partition), shell=True).decode("ascii")
+        print(lines)
+        lines = lines.split("\n")
+        print(lines)
+        for line in lines[1:-1]:
+            node = line.split(' ')[0]
+            NODE_LIST.append(node)
+    except:
+        NODE_LIST = None
+    return NODE_LIST
+
+def get_jobs(user="$", partition="optimal", type="reserved", NODE_LIST=None, logger=None) -> dict:
     """get all the job infomation of nodes"""
     try:
         lines = subprocess.check_output(SEQ_CMD.format(partition, type, user), shell=True).decode("ascii")
@@ -81,6 +91,10 @@ def get_jobs(user="$", partition="optimal", type="reserved", logger=None) -> dic
         # * filter out the space and empty string
         values = list(filter(lambda x: x != "", line.split(" ")))
         values = [values[i] for i in valids]
+
+        if (NODE_LIST is not None) and (values[HEADER.index('node')] not in NODE_LIST):
+                continue
+
         for k, v in zip(HEADER, values):
             if k == "time":
                 jobs["stime"].append(sec_runtime(v))
@@ -108,7 +122,7 @@ def is_sbatch(cmd):
     return "/mnt/" in cmd and (" " not in cmd)
 
 
-def is_target_job(jobid):
+def is_target_job(jobid, SUDO_PASSWD):
     """is the job jupyter"""
     try:
         ret = subprocess.check_output(SCT_CMD.format(jobid), shell=True).decode("utf-8")
@@ -117,7 +131,7 @@ def is_target_job(jobid):
 
         # * if use a command
         if is_sbatch(cmd):
-            ret = subprocess.check_output(BST_CMD.format(os.environ["SUDO_PASSWD"], jobid), shell=True).decode("ascii")
+            ret = subprocess.check_output(BST_CMD.format(SUDO_PASSWD, jobid), shell=True).decode("ascii")
             script = ret.split(" ")[-1].split("\n")[0]
 
             ret = subprocess.check_output("cat {}".format(script), shell=True).decode("utf-8")
@@ -132,34 +146,33 @@ def is_target_job(jobid):
     return in_target, cmd
 
 
-def kill_jp_jobs(timeout, jobs: pd.DataFrame, args, logger=None):
+def kill_jp_jobs(timeout, jobs: pd.DataFrame, cfg, logger=None):
     """kill the timeout process"""
     # * sort all job key:value by time
     jobs = jobs.sort_values(by="stime", ascending=False, ignore_index=True)
 
     # * query job target and count user number in target
-    job_valids, cmds = zip(*map(is_target_job, jobs["jobid"]))
+    job_valids, cmds = zip(*map(is_target_job, jobs["jobid"], [cfg.SUDO_PASSWD] * len(jobs["jobid"])))
     user_num = Counter([user for user, valid in zip(jobs["user"], job_valids) if valid]) # * {'user1': 2, 'user2': 1}
 
     # * init status
     jobs["status"] = [STATES[0]] * len(jobs["jobid"])
     for i, runtime in enumerate(jobs.stime):
         user, in_target, cmd, jobid = jobs["user"][i], job_valids[i], cmds[i], jobs["jobid"][i]
-
         """ * kill the job if in target and:
-        1. runtime > timeout 
+        1. runtime > timeout
         2. or gpu > 2
         3. or user_num > 2
         """
         gpus = int(jobs["total_gres"][i].split(":")[-1])
-        if in_target and (runtime > timeout * 3600 or gpus > args["jp_ngpu"] or user_num[user] > args["njob"]):
+        if in_target and (runtime > timeout * 3600 or gpus > cfg["jp_ngpu"] or user_num[user] > cfg["njob"]):
             try:
-                if not args["unkill"]:
-                    subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobid), shell=True)
+                if not cfg["unkill"]:
+                    subprocess.check_output(KILL_CMD.format(cfg.SUDO_PASSWD, jobid), shell=True)
                 jobs["status"] = STATES[1]
                 logger.info(f"== jobid: [{jobid}], cmd: [{cmd}], was killed")
-
-                if user_num[jobs["user"][i]] > args["njob"]:
+                
+                if user_num[jobs["user"][i]] > cfg["njob"]:
                     user_num[jobs["user"][i]] -= 1
             except:
                 logger.info(f"== jobid: {jobid}, cmd: {cmd}, killing failed!")
@@ -170,7 +183,7 @@ def kill_jp_jobs(timeout, jobs: pd.DataFrame, args, logger=None):
         jobs["time"][i] += " / {}".format("{:d}-{:02d}:{:02d}:{:02d}".format(timeout // 24, timeout % 24, 0, 0))
     return jobs
 
-def kill_reserved_jobs(jobs: pd.DataFrame, args, logger=None):
+def kill_reserved_jobs(jobs: pd.DataFrame, cfg, logger=None):
     """kill the num exceed jobs"""
     # * sort all job key:value by time
     jobs = jobs.sort_values(by="stime", ascending=True, ignore_index=True)
@@ -189,10 +202,10 @@ def kill_reserved_jobs(jobs: pd.DataFrame, args, logger=None):
         """ *kill the job if exceed the number limit. """
         jobid = jobs["jobid"][i]
 
-        if user_ngpu[user] > args["total_ngpu"] and job_valids[i]:
+        if user_ngpu[user] > cfg["total_ngpu"] and job_valids[i]:
             try:
-                if not args["unkill"]:
-                    subprocess.check_output(KILL_CMD.format(os.environ["SUDO_PASSWD"], jobid), shell=True)
+                if not cfg["unkill"]:
+                    subprocess.check_output(KILL_CMD.format(cfg.SUDO_PASSWD, jobid), shell=True)
                 
                 jobs["status"][i] = STATES[1]
                 logger.info(f"== jobid: [{jobid}], exceeded maxgpu number, was killed")
@@ -229,15 +242,16 @@ def viz_user_ngpu(user_ngpu):
     console.print(table)
 
 
-def threads_job(args, logger):
-    jobs = get_jobs(args["user"], args["partition"], args["type"], logger)
+def threads_job(cfg, logger):
+    NODE_LIST = get_nodes(cfg.partition)
+    jobs = get_jobs(cfg["user"], cfg["partition"], "$", NODE_LIST, logger)
     info_user_ngpu = get_user_gpu(jobs)
 
     # * kill jupyter jobs
-    njobs = kill_jp_jobs(args["timeout"], jobs, args, logger)
+    njobs = kill_jp_jobs(cfg["timeout"], jobs, cfg, logger)
 
     # * kill reserved jobs
-    njobs = kill_reserved_jobs(njobs, args, logger)
+    njobs = kill_reserved_jobs(njobs, cfg, logger)
 
     logger.info("\n")
     viz_user_ngpu(info_user_ngpu)
@@ -250,17 +264,23 @@ def main():
         print("pjkill v{}".format(VERSION))
         sys.exit()
 
+    # * load cfg
+    cfg = OmegaConf.load(args["cfg"])
+    cfg["unkill"] = args["unkill"]
+    
     # * log, name with PJKILLER + date
-    logger = get_logger("PJKILLER", f'{os.environ["HOME"]}/.pjkill')
+    log_path = f'{os.environ["HOME"]}/.pjkill/log'
+    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+    logger = get_logger("PJKILLER", log_path)
 
     if args["sweep"]:
         # * sweep
         schedule = BlockingScheduler()
-        schedule.add_job(threads_job, "interval", seconds=args["cycle"] * 60, id="PJ_KILLER", args=[args, logger], next_run_time=datetime.now())
+        schedule.add_job(threads_job, "interval", seconds=cfg["cycle"] * 60, id="PJ_KILLER", args=[cfg, logger], next_run_time=datetime.now())
         schedule.start()
     else:
         # * single
-        threads_job(args, logger)
+        threads_job(cfg, logger)
 
 
 if __name__ == "__main__":

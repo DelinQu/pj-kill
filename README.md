@@ -1,24 +1,25 @@
 # Pj-Kill
 A lightweight Tool for S-cluster to clean timeout jupyter jobs, which supports scheduler sweep, logging and rich CLI.
 
+## Update
+- [x] Add config feature, GPU limitation and enhance spot kill rule [2023-8-03]
+
 ### Examples
 
 - A single RUN
 ```zsh
-export SUDO_PASSWD=12345 # set sudo password in env
-pjkill 
+pjkill --unkill # unkill option gives a test w/o kill any jobs
 ```
 ![](.assert/overview.png)
 
 - Sweep by scheduler
 ```zsh
-export SUDO_PASSWD=12345 # set sudo password in env
-pjkill --sweep --cycle 2 # sweep every 2 hour (1 by default)
+pjkill --sweep # sweep every 60 minute
 ``` 
 
-- All the logs are stored in `~/.pjkill.log` by default
+- All the logs are stored in `~/.pjkill/log` by default
 ```zsh
-(base) tree ~/.pjkill -L 1
+(base) tree ~/.pjkill/log -L 1
 /mnt/petrelfs/qudelin/.pjkill
 ├── PJKILLER_20230906224448.log
 ├── PJKILLER_20230906224657.log
@@ -45,25 +46,37 @@ pip install git+https://github.com/DelinQu/pj-kill # install from remote repo
 ### Usage
 
 ```bash
-pjkill --help                                                                                                                                         
-
-usage: pjkill [-h] [--user USER] [--partition PARTITION] [--type TYPE] [--cycle CYCLE] [--timeout TIMEOUT] [--ngpu NGPU] [--njob NJOB] [--sweep] [--unkill] [--version]
+usage: pjkill [-h] [--cfg CFG] [--sweep] [--unkill] [--version]
 
 sweep all jobs on a partition and kill the timeout process.
 
 optional arguments:
-  -h, --help            show this help message and exit
-  --user USER           the user your want to query, all by default
-  --partition PARTITION your partition, optimal by default
-  --type TYPE           reserved | spot, reserved by default
-  --cycle CYCLE         pjkill run every cycle time in minute, 60 by default
-  --timeout TIMEOUT     timeout in hour, 10 by default
-  --ngpu NGPU           gpu limit of every job, 2 by default
-  --njob NJOB           job number limit of every user, 2 by default
-  --sweep               sweep around every cycle, False by default
-  --unkill              unkill the job to stay safe False by default
-  --version             display version and exit, False by default
+  -h, --help  show this help message and exit
+  --cfg CFG   pjkill config file, $HOME/.pjkill/config.yaml
+              by default
+  --sweep     sweep around every cycle, False by default
+  --unkill    unkill the job to stay safe False by default
+  --version   display version and exit, False by default
 ```
+
+- Configuration and log file are under $HOME/.pjkill by default:
+```yaml
+user: "$" # the user to query, all by default
+partition: optimal # the partition to query, optimal by default
+type: reserved # source type, [reserved, spot], reserved by default
+cycle: 60 # pjkill run every cycle time in minute, 60 by default
+timeout: 10 # timeout in hour, 10 by default
+jp_ngpu: 2 # gpu limit of every job, 2 by default
+total_ngpu: 12 # gpu limit of every user, 12 by default
+njob: 2 # jupyter job number limit of every user, 2 by default
+SUDO_PASSWD: 123456 # the passwd for sudo authorization
+
+# capture by CMD
+sweep: False # sweep around every cycle, False by default
+unkill: False # unkill the job to stay safe False by default
+version: False # display version and exit, False by default
+```
+
 
 ### Rules
 
