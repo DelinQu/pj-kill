@@ -63,12 +63,11 @@ optional arguments:
 ```yaml
 user: "$" # the user to query, all by default
 partition: optimal # the partition to query, optimal by default
-type: reserved # source type, [reserved, spot], reserved by default
 cycle: 60 # pjkill run every cycle time in minute, 60 by default
-timeout: 10 # timeout in hour, 10 by default
-jp_ngpu: 2 # gpu limit of every job, 2 by default
-total_ngpu: 12 # gpu limit of every user, 12 by default
-njob: 2 # jupyter job number limit of every user, 2 by default
+jp_timeout: 4 # jupyter jobs timeout limit in hour, 4 by default
+jp_ngpu: 2 # gpu limit of every jupyter job, 2 by default
+jp_njob: 8 # jupyter job number limit of every user, 2 by default
+reserved_ngpu: 12 # reserved gpu limit of every user, 12 by default
 SUDO_PASSWD: 123456 # the passwd for sudo authorization
 
 # capture by CMD

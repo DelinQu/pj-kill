@@ -165,14 +165,14 @@ def kill_jp_jobs(timeout, jobs: pd.DataFrame, cfg, logger=None):
         3. or user_num > 2
         """
         gpus = int(jobs["total_gres"][i].split(":")[-1])
-        if in_target and (runtime > timeout * 3600 or gpus > cfg["jp_ngpu"] or user_num[user] > cfg["njob"]):
+        if in_target and (runtime > timeout * 3600 or gpus > cfg["jp_ngpu"] or user_num[user] > cfg["jp_njob"]):
             try:
                 if not cfg["unkill"]:
                     subprocess.check_output(KILL_CMD.format(cfg.SUDO_PASSWD, jobid), shell=True)
                 jobs["status"] = STATES[1]
                 logger.info(f"== jobid: [{jobid}], cmd: [{cmd}], was killed")
                 
-                if user_num[jobs["user"][i]] > cfg["njob"]:
+                if user_num[jobs["user"][i]] > cfg["jp_njob"]:
                     user_num[jobs["user"][i]] -= 1
             except:
                 logger.info(f"== jobid: {jobid}, cmd: {cmd}, killing failed!")
@@ -202,7 +202,7 @@ def kill_reserved_jobs(jobs: pd.DataFrame, cfg, logger=None):
         """ *kill the job if exceed the number limit. """
         jobid = jobs["jobid"][i]
 
-        if user_ngpu[user] > cfg["total_ngpu"] and job_valids[i]:
+        if user_ngpu[user] > cfg["reserved_ngpu"] and job_valids[i]:
             try:
                 if not cfg["unkill"]:
                     subprocess.check_output(KILL_CMD.format(cfg.SUDO_PASSWD, jobid), shell=True)
@@ -248,7 +248,7 @@ def threads_job(cfg, logger):
     info_user_ngpu = get_user_gpu(jobs)
 
     # * kill jupyter jobs
-    njobs = kill_jp_jobs(cfg["timeout"], jobs, cfg, logger)
+    njobs = kill_jp_jobs(cfg["jp_timeout"], jobs, cfg, logger)
 
     # * kill reserved jobs
     njobs = kill_reserved_jobs(njobs, cfg, logger)
