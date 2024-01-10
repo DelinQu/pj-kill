@@ -66,15 +66,14 @@ def sec_runtime(time_str):
 def get_nodes(partition):
     NODE_LIST = []
     try:
-        lines = subprocess.check_output(CINFO_CMD.format(partition), shell=True).decode("ascii")
-        print(lines)
+        lines = subprocess.check_output(CINFO_CMD.format(partition), shell=True).decode("utf-8")
         lines = lines.split("\n")
-        print(lines)
         for line in lines[1:-1]:
             node = line.split(' ')[0]
             NODE_LIST.append(node)
     except:
         NODE_LIST = None
+    print(f"== get node of {partition}: {NODE_LIST}")
     return NODE_LIST
 
 def get_jobs(user="$", partition="optimal", type="reserved", NODE_LIST=None, logger=None) -> dict:
@@ -193,7 +192,7 @@ def kill_reserved_jobs(jobs: pd.DataFrame, cfg, logger=None):
     job_valids = [False] * len(jobs["jobid"])
 
     for i, user in enumerate(jobs['user']):
-        print(f"== status: {jobs['status'][i]}, quota_type: {jobs['quota_type'][i]}, priority: {jobs['priority'][i]}")
+        # print(f"== status: {jobs['status'][i]}, quota_type: {jobs['quota_type'][i]}, priority: {jobs['priority'][i]}")
         if jobs["status"][i] == STATES[0] and jobs["quota_type"][i] == "reserved" and jobs["priority"][i] == "normal":
             user_ngpu[user] += int(jobs["total_gres"][i].split(":")[-1])
             job_valids[i] = True
@@ -210,7 +209,7 @@ def kill_reserved_jobs(jobs: pd.DataFrame, cfg, logger=None):
                 jobs["status"][i] = STATES[1]
                 logger.info(f"== jobid: [{jobid}], exceeded maxgpu number, was killed")
 
-                user_ngpu -= int(jobs["total_gres"][i].split(":")[-1])
+                user_ngpu[user] -= int(jobs["total_gres"][i].split(":")[-1])
             except:
                 logger.info(f"== jobid: {jobid}, exceeded maxgpu number, killing failed!")
         else:
