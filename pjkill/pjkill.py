@@ -23,7 +23,8 @@ from pjkill.logger import get_logger
 VERSION = "0.0.1"
 
 # * table and states
-STATES = ["🎄", "🧨"]
+# STATES = ["🎄", "🧨"]
+SAFE_STATE, KILL_STATE = "🎄", "🧨"
 STYLES = ["cyan", "magenta", "green", "yellow", "red", "blue", "cyan", "magenta", "green", "yellow", "cyan"]
 
 # * JOBID VIRTUAL_PARTITION NAME QUOTA_TYPE USER PHX_PRIORITY ST TIME NODES TOTAL_GRES NODELIST(REASON)
@@ -90,7 +91,6 @@ def get_jobs(user="$", partition="optimal", type="reserved", NODE_LIST=None, log
         # * filter out the space and empty string
         values = list(filter(lambda x: x != "", line.split(" ")))
         values = [values[i] for i in valids]
-
         if (NODE_LIST is not None) and (values[HEADER.index('node')] not in NODE_LIST):
                 continue
 
@@ -155,7 +155,7 @@ def kill_jp_jobs(timeout, jobs: pd.DataFrame, cfg, logger=None):
     user_num = Counter([user for user, valid in zip(jobs["user"], job_valids) if valid]) # * {'user1': 2, 'user2': 1}
 
     # * init status
-    jobs["status"] = [STATES[0]] * len(jobs["jobid"])
+    jobs["status"] = [SAFE_STATE] * len(jobs["jobid"])
     for i, runtime in enumerate(jobs.stime):
         user, in_target, cmd, jobid = jobs["user"][i], job_valids[i], cmds[i], jobs["jobid"][i]
         """ * kill the job if in target and:
@@ -168,7 +168,7 @@ def kill_jp_jobs(timeout, jobs: pd.DataFrame, cfg, logger=None):
             try:
                 if not cfg["unkill"]:
                     subprocess.check_output(KILL_CMD.format(cfg.SUDO_PASSWD, jobid), shell=True)
-                jobs["status"] = STATES[1]
+                jobs["status"][i] = KILL_STATE
                 logger.info(f"== jobid: [{jobid}], cmd: [{cmd}], was killed")
                 
                 if user_num[jobs["user"][i]] > cfg["jp_njob"]:
@@ -193,7 +193,7 @@ def kill_reserved_jobs(jobs: pd.DataFrame, cfg, logger=None):
 
     for i, user in enumerate(jobs['user']):
         # print(f"== status: {jobs['status'][i]}, quota_type: {jobs['quota_type'][i]}, priority: {jobs['priority'][i]}")
-        if jobs["status"][i] == STATES[0] and jobs["quota_type"][i] == "reserved" and jobs["priority"][i] == "normal":
+        if jobs["status"][i] == SAFE_STATE and jobs["quota_type"][i] == "reserved" and jobs["priority"][i] == "normal":
             user_ngpu[user] += int(jobs["total_gres"][i].split(":")[-1])
             job_valids[i] = True
         
@@ -205,13 +205,12 @@ def kill_reserved_jobs(jobs: pd.DataFrame, cfg, logger=None):
             try:
                 if not cfg["unkill"]:
                     subprocess.check_output(KILL_CMD.format(cfg.SUDO_PASSWD, jobid), shell=True)
-                
-                jobs["status"][i] = STATES[1]
+                jobs["status"][i] = KILL_STATE
                 logger.info(f"== jobid: [{jobid}], exceeded maxgpu number, was killed")
 
                 user_ngpu[user] -= int(jobs["total_gres"][i].split(":")[-1])
             except:
-                logger.info(f"== jobid: {jobid}, exceeded maxgpu number, killing failed!")
+                logger.info(f"== jobid: {jobid}, exceeded maxgpu number, but killing failed!")
         else:
             logger.info(f"== jobid: [{jobid}], under maxgpu number, stays safe")
 
