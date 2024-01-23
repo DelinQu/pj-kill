@@ -77,7 +77,7 @@ def get_nodes(partition):
     print(f"== get node of {partition}: {NODE_LIST}")
     return NODE_LIST
 
-def get_jobs(user="$", partition="optimal", type="reserved", NODE_LIST=None, logger=None) -> dict:
+def get_jobs(user="$", partition="optimal", type="reserved", logger=None) -> dict:
     """get all the job infomation of nodes"""
     try:
         lines = subprocess.check_output(SEQ_CMD.format(partition, type, user), shell=True).decode("ascii")
@@ -86,40 +86,37 @@ def get_jobs(user="$", partition="optimal", type="reserved", NODE_LIST=None, log
     except:
         return {}
     jobs = {k: [] for k in HEADER + ["stime"]}
+    TYPES = ["reserved", "spot"]
 
-    for line in lines[:-1]:
+    for line in lines[1:-1]:
         # * filter out the space and empty string
         values = list(filter(lambda x: x != "", line.split(" ")))
         values = [values[i] for i in valids]
-        if (NODE_LIST is not None) and (values[HEADER.index('node')] not in NODE_LIST):
-                continue
-
+        if "SH-" not in values[-1]: continue
         for k, v in zip(HEADER, values):
             if k == "time":
                 jobs["stime"].append(sec_runtime(v))
             jobs[k].append(v)
     jobs = pd.DataFrame(jobs)
+    jobs = jobs[jobs['quota_type'].isin(TYPES)]
+    jobs["status"] = SAFE_STATE
     return jobs
 
 def get_user_gpu(jobs: pd.DataFrame):
-    types = ["reserved", "spot"]
     users = jobs['user'].unique().tolist()
     user_ngpu = {
         'user': users,
         'reserved': [0] * len(users),
         'spot': [0] * len(users)
     }
-
     for i, user in enumerate(jobs['user']):
-        if jobs["quota_type"][i] in types:
-            idx = user_ngpu['user'].index(user)
-            user_ngpu[jobs["quota_type"][i]][idx] += int(jobs["total_gres"][i].split(":")[-1])
+        idx = user_ngpu['user'].index(user)
+        user_ngpu[jobs["quota_type"][i]][idx] += int(jobs["total_gres"][i].split(":")[-1])
     df = pd.DataFrame(user_ngpu)
     return df.sort_values(by="reserved", ascending=False, ignore_index=True)
 
 def is_sbatch(cmd):
     return "/mnt/" in cmd and (" " not in cmd)
-
 
 def is_target_job(jobid, SUDO_PASSWD):
     """is the job jupyter"""
@@ -144,7 +141,6 @@ def is_target_job(jobid, SUDO_PASSWD):
 
     return in_target, cmd
 
-
 def kill_jp_jobs(timeout, jobs: pd.DataFrame, cfg, logger=None):
     """kill the timeout process"""
     # * sort all job key:value by time
@@ -154,8 +150,6 @@ def kill_jp_jobs(timeout, jobs: pd.DataFrame, cfg, logger=None):
     job_valids, cmds = zip(*map(is_target_job, jobs["jobid"], [cfg.SUDO_PASSWD] * len(jobs["jobid"])))
     user_num = Counter([user for user, valid in zip(jobs["user"], job_valids) if valid]) # * {'user1': 2, 'user2': 1}
 
-    # * init status
-    jobs["status"] = [SAFE_STATE] * len(jobs["jobid"])
     for i, runtime in enumerate(jobs.stime):
         user, in_target, cmd, jobid = jobs["user"][i], job_valids[i], cmds[i], jobs["jobid"][i]
         """ * kill the job if in target and:
@@ -169,14 +163,14 @@ def kill_jp_jobs(timeout, jobs: pd.DataFrame, cfg, logger=None):
                 if not cfg["unkill"]:
                     subprocess.check_output(KILL_CMD.format(cfg.SUDO_PASSWD, jobid), shell=True)
                 jobs["status"][i] = KILL_STATE
-                logger.info(f"== jobid: [{jobid}], cmd: [{cmd}], was killed")
+                logger.info(f"== jpyter jobid: [{jobid}], cmd: [{cmd}], was killed")
                 
                 if user_num[jobs["user"][i]] > cfg["jp_njob"]:
                     user_num[jobs["user"][i]] -= 1
             except:
-                logger.info(f"== jobid: {jobid}, cmd: {cmd}, killing failed!")
+                logger.info(f"== jpyter jobid: {jobid}, cmd: {cmd}, killing failed!")
         else:
-            logger.info(f"== jobid: [{jobid}], cmd: [{cmd}], stays safe")
+            logger.info(f"== jpyter jobid: [{jobid}], cmd: [{cmd}], stays safe")
 
         # * add ratio
         jobs["time"][i] += " / {}".format("{:d}-{:02d}:{:02d}:{:02d}".format(timeout // 24, timeout % 24, 0, 0))
@@ -206,27 +200,59 @@ def kill_reserved_jobs(jobs: pd.DataFrame, cfg, logger=None):
                 if not cfg["unkill"]:
                     subprocess.check_output(KILL_CMD.format(cfg.SUDO_PASSWD, jobid), shell=True)
                 jobs["status"][i] = KILL_STATE
-                logger.info(f"== jobid: [{jobid}], exceeded maxgpu number, was killed")
+                logger.info(f"== reserved jobid: [{jobid}], exceeded maxgpu number, was killed")
 
                 user_ngpu[user] -= int(jobs["total_gres"][i].split(":")[-1])
             except:
-                logger.info(f"== jobid: {jobid}, exceeded maxgpu number, but killing failed!")
+                logger.info(f"== reserved jobid: {jobid}, exceeded maxgpu number, but killing failed!")
         else:
-            logger.info(f"== jobid: [{jobid}], under maxgpu number, stays safe")
+            logger.info(f"== reserved jobid: [{jobid}], under maxgpu number, stays safe")
 
     return jobs
 
-def viz_jobs(jobs):
+def kill_spot_jobs(jobs: pd.DataFrame, cfg, logger=None):
+    """kill the num exceed jobs"""
+    # * sort all job key:value by time
+    jobs = jobs.sort_values(by="stime", ascending=True, ignore_index=True)
+
+    # * query job target and count user number in target
+    user_ngpu = {k: 0 for k in jobs['user'].unique().tolist()}
+    job_valids = [False] * len(jobs["jobid"])
+
+    for i, user in enumerate(jobs['user']):
+        if jobs["status"][i] == SAFE_STATE and jobs["quota_type"][i] == "spot":
+            user_ngpu[user] += int(jobs["total_gres"][i].split(":")[-1])
+            job_valids[i] = True
+        
+    for i, user in enumerate(jobs["user"]):
+        """ *kill the job if exceed the number limit. """
+        jobid = jobs["jobid"][i]
+
+        if user_ngpu[user] > cfg["spot_ngpu"] and job_valids[i]:
+            try:
+                if not cfg["unkill"]:
+                    subprocess.check_output(KILL_CMD.format(cfg.SUDO_PASSWD, jobid), shell=True)
+                jobs["status"][i] = KILL_STATE
+                logger.info(f"== spot jobid: [{jobid}], exceeded maxgpu number, was killed")
+
+                user_ngpu[user] -= int(jobs["total_gres"][i].split(":")[-1])
+            except:
+                logger.info(f"== spot jobid: {jobid}, exceeded maxgpu number, but killing failed!")
+        else:
+            logger.info(f"== spot jobid: [{jobid}], under maxgpu number, stays safe")
+
+    return jobs
+
+def viz_jobs(jobs, title="PJKILL"):
     """visualize the jobs"""
     console = Console()
-    table = Table(title="PJKILLER is Sweeping the Job List!", show_header=True, header_style="bold magenta")
+    table = Table(title=title, show_header=True, header_style="bold magenta")
     for i, k in enumerate(jobs.keys()):
         table.add_column(k, style=STYLES[i])
 
     for i in range(len(jobs["jobid"])):
         table.add_row(*[str(jobs[k][i]) for k in jobs.keys()])
     console.print(table)
-
 
 def viz_user_ngpu(user_ngpu):
     """visualize the user gpu"""
@@ -239,22 +265,33 @@ def viz_user_ngpu(user_ngpu):
         table.add_row(*[str(user_ngpu[k][i]) for k in user_ngpu.keys()])
     console.print(table)
 
-
 def threads_job(cfg, logger):
-    NODE_LIST = get_nodes(cfg.partition)
-    jobs = get_jobs(cfg["user"], cfg["partition"], "$", NODE_LIST, logger)
-    info_user_ngpu = get_user_gpu(jobs)
+    # * get optimal NODES
+    NODE_LIST = get_nodes(cfg["partition"])
 
-    # * kill jupyter jobs
-    njobs = kill_jp_jobs(cfg["jp_timeout"], jobs, cfg, logger)
+    # * get all jobs
+    all_jobs = get_jobs(cfg["user"], cfg["partition"], "$", logger=logger)
+    vp_jobs, nvp_jobs = all_jobs[all_jobs['node'].isin(NODE_LIST)].copy(), all_jobs[~all_jobs['node'].isin(NODE_LIST)].copy()
 
-    # * kill reserved jobs
-    njobs = kill_reserved_jobs(njobs, cfg, logger)
+    # * kill jupyter jobs in vp
+    vp_jobs = kill_jp_jobs(cfg["jp_timeout"], vp_jobs, cfg, logger)
+
+    # * kill reserved jobs in vp
+    vp_jobs = kill_reserved_jobs(vp_jobs, cfg, logger)
+
+    # * kill spot jobs in other partition
+    nvp_jobs = kill_spot_jobs(nvp_jobs, cfg, logger)
+
+    # * show user gpu info
+    info_user_ngpu = get_user_gpu(all_jobs)
+    viz_user_ngpu(info_user_ngpu)
+
+    # * show vp jobs and nvp jobs 
+    logger.info("\n")
+    viz_jobs(vp_jobs.drop('stime', axis=1), title=f"PJKILLER is Sweeping the Job List on {cfg['partition']}!")
 
     logger.info("\n")
-    viz_user_ngpu(info_user_ngpu)
-    viz_jobs(njobs.drop('stime', axis=1))
-
+    viz_jobs(nvp_jobs.drop('stime', axis=1), title="PJKILLER is Sweeping the Job List on Other Partition!")
 
 def main():
     args = init_args()
@@ -279,7 +316,6 @@ def main():
     else:
         # * single
         threads_job(cfg, logger)
-
 
 if __name__ == "__main__":
     main()
