@@ -1,12 +1,24 @@
 user: "$" # the user to query, all by default
 partition: optimal # the partition to query, optimal by default
-cycle: 60 # pjkill run every cycle time in minute, 60 by default
-jp_timeout: 4 # jupyter jobs timeout limit in hour, 4 by default
-jp_ngpu: 2 # gpu limit of every jupyter job, 2 by default
-jp_njob: 8 # jupyter job number limit of every user, 2 by default
-reserved_ngpu: 8 # reserved gpu limit of every user, 12 by default
-spot_ngpu: 32 # spot gpu limit of every user, 32 by default
-SUDO_PASSWD: 123456 # the passwd for sudo authorization
+cycle: 30 # pjkill run every cycle time in minute, 60 by default
+SUDO_PASSWD: xxxxx # the passwd for sudo authorization
+
+# Note that jp job is not allowed to [PD]
+reserved:
+  jp_timeout: 2 # jupyter jobs timeout limit in hour, 4 by default
+  max_ngpu_every_jp: 1 # gpu limit of every jupyter job, 2 by default
+  max_jp_njob: 1 # jupyter job number limit of every user, 2 by default
+
+  max_ngpu: 10 # spot gpu limit of every user, 64 by default
+  max_exce_pd: 1 # the PD jobs when exceed the max ngpu limitation
+
+spot:
+  jp_timeout: 2 # jupyter jobs timeout limit in hour, 4 by default
+  max_ngpu_every_jp: 1 # gpu limit of every jupyter job, 2 by default
+  max_jp_njob: 1 # jupyter job number limit of every user, 2 by default
+
+  max_ngpu: 10 # spot gpu limit of every user, 64 by default
+  max_exce_pd: 1 # the PD jobs when exceed the max ngpu limitation
 
 # capture by CMD
 sweep: False # sweep around every cycle, False by default
