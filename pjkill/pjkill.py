@@ -25,7 +25,7 @@ VERSION = "0.0.2"
 
 # * table and states
 SAFE_STATE, KILL_STATE = "🎄", "🧨"
-STYLES = ["cyan", "magenta", "green", "yellow", "red", "blue", "cyan", "magenta", "green", "yellow", "cyan", "green", "magenta", "green", "yellow", ]
+STYLES = ["cyan", "magenta", "green", "yellow", "red", "blue", "cyan", "magenta", "green", "yellow", "cyan", "green", "magenta", "green", "yellow"] * 5
 
 # * JOBID VIRTUAL_PARTITION NAME QUOTA_TYPE USER PHX_PRIORITY ST TIME NODES TOTAL_GRES NODELIST(REASON)
 HEADER = ["jobid", "partition", "name", "quota_type", "user", "priority", "time", "total_gres", "node"]
@@ -38,6 +38,10 @@ SCT_CMD = "scontrol show job -ddd {}"  # * scontrol show job -ddd 123456
 BST_CMD = "echo {} | sudo -S scontrol write batch_script {}"  # * scontrol write batchscript
 CINFO_CMD = "cinfo -p {} occupy-reserved" # * show nodes of a specific partition
 
+# NV_SMI_CMD = "srun -p {} -w {} nvidia-smi"
+SWATCH_CMD = "swatch -n {} nv always"
+PS_PID_CMD = "srun -p {} -w {} ps -o user,time,cmd -p {}"
+
 # * kill rules
 TARGETS = ["jupyter"]  # * kill the job if targets in name & runtime > timeout
 class CMT(Enum):
@@ -48,15 +52,71 @@ class CMT(Enum):
     MAX_PD = "MAX_PD"
     MAX_GPU = "MAX_GPU"
 
-def init_args() -> Dict:
-    """Parse and return the arguments."""
-    parser = argparse.ArgumentParser(description="sweep all jobs on a partition and kill the timeout process.")
-    parser.add_argument("--cfg", type=str, default=f"{os.environ['HOME']}/.pjkill/config.yaml", help=f"pjkill config file, {os.environ['HOME']}/.pjkill/config.yaml by default")
-    parser.add_argument("--sweep", action="store_true", help="sweep around every cycle, False by default")
-    parser.add_argument("--unkill", action="store_true", help="unkill the job to stay safe False by default")
-    parser.add_argument("--version", action="store_true", help="display version and exit, False by default")
-    args = vars(parser.parse_args())
-    return args
+def get_reserved_nodes(partition):
+    NODE_LIST = []
+    try:
+        lines = subprocess.check_output(CINFO_CMD.format(partition), shell=True).decode("utf-8")
+        lines = lines.split("\n")
+        for line in lines[1:-1]:
+            node = line.split(' ')[0]
+            NODE_LIST.append(node)
+    except:
+        NODE_LIST = None
+    print(f"== get node of {partition}: {NODE_LIST}")
+    return NODE_LIST
+
+def get_nvsmi(partition="optimal", node=None):
+    try:
+        ret = subprocess.check_output(SWATCH_CMD.format(node), shell=True).decode("ascii")
+        header = ["PID", "NODE", "IDX", "USER", "Memory", "Util", "TIME", "CMD"]
+        gpu_data = {k: {} for k in range(8)}
+        prc_data = {k: [] for k in header}
+        idx = 0
+        for line in ret.split("\n"):
+            # gpu occupy
+            if "MiB / " in line:
+                mems = list(filter(lambda x: "MiB" in x, line.split()))
+                utls = list(filter(lambda x: "%" in x, line.split()))
+                gpu_data[idx]["Memory"] = float(mems[0][:-3]) / float(mems[1][:-3])
+                gpu_data[idx]["Util"] = float(utls[0][:-1])
+                idx += 1
+
+        # * process
+        idx_list, pid_list = [], [] 
+        for line in ret.split("\n"):            
+            if "N/A  N/A" in line:
+                print(line)
+                idx_list.append(int(line.split()[1]))
+                pid_list.append(line.split()[4])
+        
+        # * sort according to pid
+        sorted_pairs = sorted(zip(pid_list, idx_list), key = lambda x: int(x[0]))
+        pid_list, idx_list = map(list, zip(*sorted_pairs))
+        cmd = PS_PID_CMD.format(partition, node, " ".join(pid_list))
+        print(f"PS_PID_CMD {cmd}")
+        ret = subprocess.check_output(cmd, shell=True).decode("ascii")
+        data = [x.split() for x in filter(lambda x: len(x) > 50, ret.split("\n"))]
+        
+        ptr, pad_data = 0, data[:1]
+        for i in range(len(pid_list))[1:]:
+            if pid_list[i] != pid_list[i-1]: ptr += 1
+            pad_data.append(data[ptr])
+        
+        for pid, idx, line in zip(pid_list, idx_list, pad_data):
+            data = line
+            prc_data["PID"].append(str(pid))
+            prc_data["IDX"].append(str(idx))
+            prc_data["NODE"].append(node)
+            prc_data["USER"].append(data[0])
+            prc_data["TIME"].append(data[1])
+            prc_data["CMD"].append(data[2])
+            prc_data["Memory"].append(100 * gpu_data[idx]["Memory"])
+            prc_data["Util"].append(gpu_data[idx]["Util"])
+    except:
+        print("** Warning: NVIDIA SMI error!")
+        prc_data = {}
+    
+    return pd.DataFrame(prc_data).sort_values(by="IDX", ascending=True, ignore_index=True)
 
 def sec_runtime(time_str):
     pattern = r"^(?:(\d+)-)?(?:([01]?\d|2[0-3]):)?([0-5]?\d):([0-5]?\d)$"
@@ -70,19 +130,6 @@ def sec_runtime(time_str):
         return sec_time
     else:
         return "Invalid time format"
-
-def get_nodes(partition):
-    NODE_LIST = []
-    try:
-        lines = subprocess.check_output(CINFO_CMD.format(partition), shell=True).decode("utf-8")
-        lines = lines.split("\n")
-        for line in lines[1:-1]:
-            node = line.split(' ')[0]
-            NODE_LIST.append(node)
-    except:
-        NODE_LIST = None
-    print(f"== get node of {partition}: {NODE_LIST}")
-    return NODE_LIST
 
 def get_jobs(user="$", partition="optimal", type="reserved", logger=None) -> dict:
     """get all the job infomation of nodes"""
@@ -101,8 +148,15 @@ def get_jobs(user="$", partition="optimal", type="reserved", logger=None) -> dic
         for k, v in zip(HEADER, values):
             jobs[k].append(v)
             if k == "TIME": jobs["KTIME"].append(sec_runtime(v))
-    jobs = pd.DataFrame(jobs)
     
+    # * add IDX
+    jobs["IDX"] = []
+    for jobid in jobs["JOBID"]:
+        ret = subprocess.check_output(SCT_CMD.format(jobid), shell=True).decode("utf-8")
+        matches = re.search(r"IDX:([\d,]+)", ret)
+        jobs["IDX"].append(matches.group(1) if matches else "")
+    
+    jobs = pd.DataFrame(jobs)
     # TYPES = ["reserved", "spot"]
     # jobs = jobs[jobs['quota_type'].isin(TYPES)]
     
@@ -131,6 +185,7 @@ def is_target_job(jobid, SUDO_PASSWD):
     try:
         ret = subprocess.check_output(SCT_CMD.format(jobid), shell=True).decode("utf-8")
         cmd = ret.split("Command=")[1].split("\n")[0]
+
         in_target = any([(t in cmd) for t in TARGETS])
 
         # * if use a command
@@ -151,6 +206,48 @@ def is_target_job(jobid, SUDO_PASSWD):
 
 def kill_jp_jobs(jobs: pd.DataFrame, cfg, SUDO_PASSWD, unkill=True, logger=None):
     """kill the timeout process"""
+    if jobs.empty:
+        print(f"** Jupyter Job Killer Receive an empty job DataFrame! **")
+        return jobs
+
+    # * sort all job key:value by time
+    jobs = jobs.sort_values(by="KTIME", ascending=False, ignore_index=True)
+
+    # * query job target and count user number in target
+    job_valids, cmds = zip(*map(is_target_job, jobs["JOBID"], [SUDO_PASSWD] * len(jobs["JOBID"])))
+    user_njob = Counter([user for user, valid in zip(jobs["USER"], job_valids) if valid]) # * {'user1': 2, 'user2': 1}
+    timeout = cfg["jp_timeout"]
+
+    for i, job in jobs.iterrows():
+        user, in_target, cmd, jobid = job["USER"], job_valids[i], cmds[i], job["JOBID"]
+        """ * kill the job if in target and:
+        1. runtime > timeout
+        2. or gpu > max_ngpu_every_jp
+        3. or user_njob > max_jp_njob
+        """
+        gpus = int(job["TOTAL_GRES"].split(":")[-1])
+        if in_target and (job["KTIME"] > timeout * 3600 or gpus > cfg["max_ngpu_every_jp"] or user_njob[user] > cfg["max_jp_njob"]):
+            try:
+                if not unkill:
+                    subprocess.check_output(KILL_CMD.format(SUDO_PASSWD, jobid), shell=True)
+                jobs.at[i, "KST"] = KILL_STATE
+                jobs.at[i, "CMT"] = CMT.JP_TIMEOUT.value if job["KTIME"] > timeout * 3600 else CMT.JP_MAX_GPU.value if gpus > cfg["max_ngpu_every_jp"] else CMT.JP_MAX_JOB.value
+
+                if user_njob[user] > cfg["max_jp_njob"]:
+                    user_njob[user] -= 1
+                logger.info(f"== jpyter jobid: [{jobid}], cmd: [{cmd}], was killed")
+            except:
+                logger.info(f"** jpyter jobid: {jobid}, cmd: {cmd}, killing failed!")
+        else:
+            logger.info(f"== jpyter jobid: [{jobid}], cmd: [{cmd}], stays safe")
+    return jobs
+
+def kill_cuda_jobs(jobs: pd.DataFrame, cfg, SUDO_PASSWD, unkill=True, logger=None):
+    """kill the timeout process"""
+    if jobs.empty:
+        print(f"** CUDA Job Killer Receive an empty job DataFrame! **")
+        return jobs
+
     # * sort all job key:value by time
     jobs = jobs.sort_values(by="KTIME", ascending=False, ignore_index=True)
 
@@ -185,6 +282,10 @@ def kill_jp_jobs(jobs: pd.DataFrame, cfg, SUDO_PASSWD, unkill=True, logger=None)
 
 def kill_norm_jobs(jobs: pd.DataFrame, cfg, SUDO_PASSWD, unkill=True, logger=None):
     """kill the num exceed jobs"""
+    if jobs.empty:
+        print(f"** Norm Job Killer Receive an empty job DataFrame! **")
+        return jobs
+
     # * sort all job key:value by time
     jobs = jobs.sort_values(by="KTIME", ascending=True, ignore_index=True)
 
@@ -201,16 +302,16 @@ def kill_norm_jobs(jobs: pd.DataFrame, cfg, SUDO_PASSWD, unkill=True, logger=Non
     # * kill exceed the number limit jobs
     for i, job in jobs.iterrows():
         """ kill the job if exceed the number limit. """
-        jobid = job["JOBID"]
-        if user_ngpu[job["USER"]] > cfg["max_ngpu"] and job_valids[i]:
+        jobid, user = job["JOBID"], job["USER"]
+        if user_ngpu[user] > cfg["max_ngpu"] and job_valids[i]:
             try:
                 if not unkill:
                     subprocess.check_output(KILL_CMD.format(SUDO_PASSWD, jobid), shell=True)
                 jobs.at[i, "KST"] = KILL_STATE
                 jobs.at[i, "CMT"] = CMT.MAX_GPU.value
                 logger.info(f"== jobid: [{jobid}], exceeded maxgpu number, was killed")
-                user_ngpu[job["USER"]] -= int(job["TOTAL_GRES"].split(":")[-1])
-                user_exceed[job["USER"]] = True # mark as user_exceed
+                user_ngpu[user] -= int(job["TOTAL_GRES"].split(":")[-1])
+                user_exceed[user] = True # mark as user_exceed
             except:
                 logger.info(f"** jobid: {jobid}, exceeded maxgpu number, but killing failed!")
         else:
@@ -237,39 +338,6 @@ def kill_norm_jobs(jobs: pd.DataFrame, cfg, SUDO_PASSWD, unkill=True, logger=Non
             logger.info(f"== jobid: [{jobid}], under max PD number, stays safe")
     return jobs
 
-def kill_spot_jobs(jobs: pd.DataFrame, cfg, logger=None):
-    """kill the num exceed jobs"""
-    # * sort all job key:value by time
-    jobs = jobs.sort_values(by="stime", ascending=True, ignore_index=True)
-
-    # * query job target and count user number in target
-    user_ngpu = {k: 0 for k in jobs["USER"].unique().tolist()}
-    job_valids = [False] * len(jobs["JOBID"])
-
-    for i, user in enumerate(jobs["USER"]):
-        if jobs["KST"][i] == SAFE_STATE and jobs["quota_type"][i] == "spot":
-            user_ngpu[user] += int(jobs["TOTAL_GRES"][i].split(":")[-1])
-            job_valids[i] = True
-        
-    for i, user in enumerate(jobs["USER"]):
-        """ *kill the job if exceed the number limit. """
-        jobid = jobs["JOBID"][i]
-
-        if user_ngpu[user] > cfg["spot_ngpu"] and job_valids[i]:
-            try:
-                if not unkill:
-                    subprocess.check_output(KILL_CMD.format(SUDO_PASSWD, jobid), shell=True)
-                jobs["KST"][i] = KILL_STATE
-                logger.info(f"== spot jobid: [{jobid}], exceeded maxgpu number, was killed")
-
-                user_ngpu[user] -= int(jobs["TOTAL_GRES"][i].split(":")[-1])
-            except:
-                logger.info(f"== spot jobid: {jobid}, exceeded maxgpu number, but killing failed!")
-        else:
-            logger.info(f"== spot jobid: [{jobid}], under maxgpu number, stays safe")
-
-    return jobs
-
 def viz_jobs(jobs, title="PJKILL"):
     """visualize the jobs"""
     console = Console()
@@ -294,33 +362,58 @@ def viz_user_ngpu(user_ngpu):
     console.print(table)
 
 def threads_job(cfg, logger):
-    # * get optimal NODES
-    # NODE_LIST = get_nodes(cfg["partition"])
-
     # * get all jobs
     all_jobs = get_jobs(cfg["user"], cfg["partition"], "$", logger=logger)
+    all_jobs["USER"] = all_jobs["USER"].str[:7]
+    
     reserved_jobs = all_jobs[all_jobs['QUOTA_TYPE'] == 'reserved'].copy().reset_index(drop=True) 
     spot_jobs = all_jobs[all_jobs['QUOTA_TYPE'] == 'spot'].copy().reset_index(drop=True)
     
+    # * get CUDA PROCESS
+    # RESERVED_NODE_LIST = get_reserved_nodes(cfg["partition"])
+    # # RESERVED_NODE_LIST = ["SH-IDC1-10-140-1-164"]
+    # cuda_procs = pd.concat([get_nvsmi(cfg["partition"], node) for node in RESERVED_NODE_LIST])
+    # cuda_procs["USER"] = cuda_procs["USER"].str[:7]
+
+    # # split jobs
+    # split_reserved_jobs = reserved_jobs.copy(deep=True)
+    # split_reserved_jobs['IDX'] = split_reserved_jobs['IDX'].str.split(',')
+    # split_reserved_jobs = split_reserved_jobs.explode('IDX')
+    # left_merged = pd.merge(split_reserved_jobs, cuda_procs, left_on=['NODELIST(REASON)', 'USER', "IDX"], right_on=['NODE', 'USER', "IDX"], how='left')
+
+    # viz_jobs(reserved_jobs, title="RESERVED JOBS")
+    # viz_jobs(cuda_procs)
+    # viz_jobs(left_merged)
+
+    # TODO: Add CUDA KILLER with a History Record
+
     # * kill reserved jobs
     reserved_jobs = kill_jp_jobs(reserved_jobs, cfg.reserved, cfg.SUDO_PASSWD, cfg.unkill, logger)
     reserved_jobs = kill_norm_jobs(reserved_jobs, cfg.reserved, cfg.SUDO_PASSWD, cfg.unkill, logger)
-    viz_jobs(reserved_jobs, title="RESERVED JOBS")
 
     # * kill spot jobs
     spot_jobs = kill_jp_jobs(spot_jobs, cfg.spot, cfg.SUDO_PASSWD, cfg.unkill, logger)
     spot_jobs = kill_norm_jobs(spot_jobs, cfg.spot, cfg.SUDO_PASSWD, cfg.unkill, logger)
+    
+    # * visulize
+    viz_jobs(reserved_jobs, title="RESERVED JOBS")
     viz_jobs(spot_jobs, title="SPOT JOBS")
 
 def main():
-    args = init_args()
+    """Parse and return the arguments."""
+    parser = argparse.ArgumentParser(description="sweep all jobs on a partition and kill the timeout process.")
+    parser.add_argument("--cfg", type=str, default=f"{os.environ['HOME']}/.pjkill/config.yaml", help=f"pjkill config file, {os.environ['HOME']}/.pjkill/config.yaml by default")
+    parser.add_argument("--sweep", action="store_true", help="sweep around every cycle, False by default")
+    parser.add_argument("--unkill", action="store_true", help="unkill the job to stay safe False by default")
+    parser.add_argument("--version", action="store_true", help="display version and exit, False by default")
+    args = vars(parser.parse_args())
+
     if args["version"]:
         print("pjkill v{}".format(VERSION))
         sys.exit()
 
     # * load cfg
     cfg = OmegaConf.load(args["cfg"])
-    unkill = args["unkill"]
     
     # * log, name with PJKILLER + date
     log_path = f'{os.environ["HOME"]}/.pjkill/log'
